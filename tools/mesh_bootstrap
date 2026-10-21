@@ -1,0 +1,181 @@
+#!/usr/bin/env python3
+"""
+Turnkey Workspace Bootstrapper Tool for ABB Agent MESH.
+
+Wraps the unified `mesh` CLI and bootstraps workspaces using bundled
+preset templates (`triad`, `research`, `machine_manager`, or custom cards)
+and installs declared Agent Profile ECPs.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+SKILL_ROOT = Path(__file__).resolve().parent.parent
+TEMPLATES_DIR = SKILL_ROOT / "templates"
+ECPS_DIR = TEMPLATES_DIR / "ecps"
+
+
+def run_verify() -> bool:
+    verify_script = SKILL_ROOT / "tools" / "verify_mesh_env"
+    if verify_script.exists():
+        res = subprocess.run([sys.executable, str(verify_script)], text=True)
+        return res.returncode == 0
+    return True
+
+
+def copy_profile_ecps(workspace_path: Path) -> None:
+    """Copies bundled agent profile ECPs into the target workspace skills directory."""
+    target_skills_dir = workspace_path / ".agents" / "skills"
+    target_skills_dir.mkdir(parents=True, exist_ok=True)
+
+    if ECPS_DIR.exists():
+        for ecp_dir in ECPS_DIR.iterdir():
+            if ecp_dir.is_dir():
+                target_dest = target_skills_dir / ecp_dir.name
+                if not target_dest.exists():
+                    shutil.copytree(ecp_dir, target_dest)
+                    print(f"  [+] Deployed Agent Profile ECP: .agents/skills/{ecp_dir.name}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="mesh_bootstrap",
+        description="Bootstrap a new ABB Agent MESH workspace with full .agents topology.",
+    )
+    parser.add_argument(
+        "workspace",
+        nargs="?",
+        default=".",
+        help="Target directory to initialize (default: current directory)",
+    )
+    parser.add_argument(
+        "--name", "-n",
+        default=None,
+        help="Project or workspace name",
+    )
+    parser.add_argument(
+        "--template", "-t",
+        choices=["triad", "research", "machine_manager", "custom"],
+        default="triad",
+        help="Topology preset: triad, research, machine_manager, custom (default: triad)",
+    )
+    parser.add_argument(
+        "--cards", "-c",
+        nargs="+",
+        default=None,
+        help="Path(s) to custom agent card JSON file(s) or directory",
+    )
+    parser.add_argument(
+        "--harness", "-H",
+        choices=["pi", "openhands", "copilot", "sdk"],
+        default=None,
+        help="Agent harness execution engine",
+    )
+    parser.add_argument(
+        "--provider", "-p",
+        default=None,
+        help="Inference engine provider (google, anthropic, openai, openrouter, deepseek, ollama, custom-openai)",
+    )
+    parser.add_argument(
+        "--model", "-m",
+        default=None,
+        help="LLM model identifier (default: gemini-3.7-flash)",
+    )
+    parser.add_argument(
+        "--thinking", "-k",
+        choices=["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+        default=None,
+        help="Thinking effort level",
+    )
+    parser.add_argument(
+        "--skills", "-s",
+        default=None,
+        help="Comma-separated list of additional ECP skills to install",
+    )
+    parser.add_argument(
+        "--skip-verify",
+        action="store_true",
+        help="Skip pre-flight environment checks",
+    )
+    parser.add_argument(
+        "--force", "-f",
+        action="store_true",
+        help="Overwrite existing configuration files if present",
+    )
+
+    args = parser.parse_args()
+
+    # Step 1: Pre-flight Verification
+    if not args.skip_verify:
+        print("[*] Running pre-flight diagnostic check...")
+        if not run_verify():
+            print("\n[!] Pre-flight verification failed. Bootstrap paused. Fix the above requirements before continuing.")
+            return 1
+
+    mesh_bin = shutil.which("mesh")
+    if not mesh_bin:
+        print("\n[!] Error: `mesh` CLI is not found in PATH. Install with: pip install -e .")
+        return 1
+
+    # Step 2: Determine Cards source
+    template_name = args.template
+    cards_to_import: list[str] = []
+
+    if args.cards:
+        cards_to_import = args.cards
+    elif template_name in ("triad", "research", "machine_manager"):
+        preset_dir = TEMPLATES_DIR / template_name
+        if preset_dir.exists():
+            cards_to_import = [str(preset_dir)]
+
+    # Step 3: Build mesh init command
+    ws_path = Path(args.workspace).resolve()
+    cmd = [
+        mesh_bin,
+        "init",
+        str(ws_path),
+    ]
+    if args.name:
+        cmd.extend(["--name", args.name])
+    if cards_to_import:
+        cmd.extend(["--cards", *cards_to_import])
+    else:
+        cmd.extend(["--template", template_name])
+
+    if args.harness:
+        cmd.extend(["--harness", args.harness])
+    if args.provider:
+        cmd.extend(["--provider", args.provider])
+    else:
+        cmd.extend(["--provider", "google"])
+
+    if args.model:
+        cmd.extend(["--model", args.model])
+    else:
+        cmd.extend(["--model", "gemini-3.7-flash"])
+
+    if args.thinking:
+        cmd.extend(["--thinking", args.thinking])
+    if args.skills:
+        cmd.extend(["--skills", args.skills])
+    if args.force:
+        cmd.append("--force")
+
+    print(f"\n[*] Executing: {' '.join(cmd)}")
+    res = subprocess.run(cmd)
+
+    # Step 4: Deploy bundled Profile ECPs
+    if res.returncode == 0:
+        copy_profile_ecps(ws_path)
+
+    return res.returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main())

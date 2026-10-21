@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""
+Pre-flight verification diagnostic utility for ABB Agent MESH.
+
+Verifies:
+1. `mesh` CLI tool availability and executable status.
+2. Core Python runtime dependencies (FastAPI, Uvicorn, Pydantic v2, HTTPX, mesh).
+3. Live execution test of Pi (`pi -p "hi"`) or GitHub Copilot (`copilot -p "hi" --silent --no-custom-instructions`).
+   At least one functional harness is strictly required to host MESH.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+
+def check_mesh_cli() -> bool:
+    print("[*] Checking `mesh` CLI tool:")
+    mesh_bin = shutil.which("mesh")
+    if mesh_bin:
+        print(f"    [+] `mesh` CLI found at: {mesh_bin}")
+        return True
+    
+    print("    [-] ERROR: `mesh` CLI tool is NOT found in PATH.")
+    print("\n" + "=" * 60)
+    print("  INSTALLATION INSTRUCTIONS FOR MESH CLI:")
+    print("=" * 60)
+    print("  To install the `mesh` CLI, run the following in your environment:")
+    print("    pip install -e .")
+    print("  or install into user bin:")
+    print("    pip install --user -e /path/to/MESH_Dev")
+    print("  Ensure that `~/.local/bin` (or your Python script directory) is in your PATH:")
+    print('    export PATH="$HOME/.local/bin:$PATH"')
+    print("=" * 60 + "\n")
+    return False
+
+
+def check_python_dependencies() -> bool:
+    print("[*] Checking Core Python Dependencies:")
+    current_dir = Path(__file__).resolve().parent
+    repo_root = current_dir.parent.parent.parent.parent
+    if (repo_root / "mesh").exists() and str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+    required_pkgs = [
+        ("fastapi", "FastAPI"),
+        ("uvicorn", "Uvicorn"),
+        ("pydantic", "Pydantic (v2)"),
+        ("httpx", "HTTPX"),
+        ("mesh", "ABB Agent MESH package"),
+    ]
+    all_ok = True
+    for mod_name, label in required_pkgs:
+        spec = importlib.util.find_spec(mod_name)
+        if spec is not None:
+            print(f"    [+] {label:30} found")
+        else:
+            print(f"    [-] {label:30} MISSING")
+            all_ok = False
+    return all_ok
+
+
+def test_pi_harness() -> bool:
+    pi_bin = shutil.which("pi")
+    if not pi_bin:
+        return False
+    print("    [*] Testing Pi harness connectivity (pi -p 'hi')...")
+    try:
+        res = subprocess.run(
+            [pi_bin, "-p", "hi"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            print(f"    [+] Pi harness is ACTIVE and functional. Response preview: {res.stdout.strip()[:60]}...")
+            return True
+        else:
+            print(f"    [~] Pi harness returned non-zero code or empty output (code: {res.returncode}).")
+            if res.stderr:
+                print(f"        Stderr: {res.stderr.strip()[:100]}")
+            return False
+    except subprocess.TimeoutExpired:
+        print("    [~] Pi harness test timed out after 15s.")
+        return False
+    except Exception as e:
+        print(f"    [~] Pi harness execution error: {e}")
+        return False
+
+
+def test_copilot_harness() -> bool:
+    copilot_bin = shutil.which("copilot")
+    if not copilot_bin:
+        return False
+    print("    [*] Testing GitHub Copilot harness connectivity (copilot -p 'hi')...")
+    try:
+        res = subprocess.run(
+            [copilot_bin, "-p", "hi", "--silent", "--no-custom-instructions"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            print(f"    [+] GitHub Copilot harness is ACTIVE and functional. Response preview: {res.stdout.strip()[:60]}...")
+            return True
+        else:
+            print(f"    [~] GitHub Copilot returned non-zero code or empty output (code: {res.returncode}).")
+            if res.stderr:
+                print(f"        Stderr: {res.stderr.strip()[:100]}")
+            return False
+    except subprocess.TimeoutExpired:
+        print("    [~] GitHub Copilot harness test timed out after 15s.")
+        return False
+    except Exception as e:
+        print(f"    [~] GitHub Copilot harness execution error: {e}")
+        return False
+
+
+def check_harness_availability() -> bool:
+    print("[*] Verifying Execution Harness Functionality (Pi or Copilot required):")
+    
+    pi_ok = test_pi_harness()
+    if pi_ok:
+        return True
+
+    copilot_ok = test_copilot_harness()
+    if copilot_ok:
+        return True
+
+    print("\n" + "=" * 60)
+    print("  CRITICAL ERROR: NO FUNCTIONAL AGENT HARNESS FOUND")
+    print("=" * 60)
+    print("  ABB Agent MESH requires at least ONE functional execution harness:")
+    print("  either the `pi` coding agent CLI or the `copilot` CLI.\n")
+    print("  Option 1: Install and configure Pi Coding Agent:")
+    print("    npm install -g @earendil-works/pi-coding-agent")
+    print("    # Then export your model API key, e.g.:")
+    print("    export GEMINI_API_KEY=\"<your-api-key>\"")
+    print("    # Or export ANTHROPIC_API_KEY / OPENAI_API_KEY\n")
+    print("  Option 2: Install and authenticate GitHub Copilot CLI:")
+    print("    # Follow: https://docs.github.com/copilot/how-tos/copilot-cli")
+    print("    copilot login")
+    print("=" * 60 + "\n")
+    return False
+
+
+def main() -> int:
+    print("=" * 60)
+    print("  ABB Agent MESH Environment Pre-flight Diagnostic")
+    print("=" * 60)
+
+    mesh_ok = check_mesh_cli()
+    deps_ok = check_python_dependencies()
+    harness_ok = check_harness_availability()
+
+    print("=" * 60)
+    if mesh_ok and deps_ok and harness_ok:
+        print("[SUCCESS] All prerequisites met. Ready to bootstrap and host MESH.")
+        return 0
+    else:
+        print("[FAILURE] Missing prerequisites. MESH bootstrap must be paused.")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
